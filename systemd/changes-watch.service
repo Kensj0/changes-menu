@@ -1,0 +1,13 @@
+[Unit]
+Description=Logga nya och sparade filer för Changes-menyn
+
+[Service]
+ExecStart=/usr/bin/python3 %h/.local/bin/changes-watch
+Restart=on-failure
+RestartSec=5
+# Lägsta prioritet så den aldrig stör när datorn används
+Nice=19
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target

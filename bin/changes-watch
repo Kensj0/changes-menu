@@ -1,0 +1,127 @@
+#!/usr/bin/python3
+# changes-watch: loggar nya/sparade filer i hemkatalogen (händelsestyrt via inotify).
+# Ingen polling: processen sover i kärnan tills något sparas. Ingen extern paketinstallation.
+import ctypes, ctypes.util, os, struct, sys, time, errno
+
+HOME = os.path.expanduser("~")
+STATE_DIR = os.path.join(HOME, ".local", "state", "changes")
+LOG = os.path.join(STATE_DIR, "log.txt")
+KEEP = 200            # rader som behålls i loggen
+TRIM_AT = 250         # trimma när loggen passerar detta (amorterat, skriver sällan)
+
+IN_MODIFY = 0x2
+IN_CLOSE_WRITE = 0x8
+IN_MOVED_TO = 0x80
+IN_CREATE = 0x100
+IN_Q_OVERFLOW = 0x4000
+IN_ISDIR = 0x40000000
+IN_ONLYDIR = 0x01000000
+WATCH_MASK = IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_ONLYDIR
+
+# Mappar (relativt hemkatalogen) och mappnamn som inte bevakas
+SKIP_REL = {
+    ".local/state", ".local/share/Trash", ".local/share/flatpak",
+    ".config/BraveSoftware", ".mozilla", ".var", ".cache",
+}
+SKIP_NAMES = {".cache", ".var", ".npm", ".gradle", "node_modules", ".git", "snap",
+              ".Trash", "__pycache__"}
+IGNORE_SUFFIX = (".crdownload", ".part", ".tmp", ".swp", "~")
+
+libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+libc.inotify_init1.argtypes = [ctypes.c_int]
+libc.inotify_add_watch.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+
+
+def skip_dir(path):
+    rel = os.path.relpath(path, HOME)
+    if rel == ".":
+        return False
+    if any(rel == s or rel.startswith(s + os.sep) for s in SKIP_REL):
+        return True
+    # Dolda mappar (.claude, .config, .local, ...) hoppas över: där skrivs mycket
+    # internt, och det är inte filer användaren sparat.
+    return any(part.startswith(".") or part in SKIP_NAMES for part in rel.split(os.sep))
+
+
+def main():
+    os.makedirs(STATE_DIR, exist_ok=True)
+    fd = libc.inotify_init1(os.O_CLOEXEC | os.O_NONBLOCK)
+    if fd < 0:
+        sys.exit("inotify_init1 misslyckades: " + os.strerror(ctypes.get_errno()))
+
+    wd_to_path = {}
+
+    def add_watch(path):
+        wd = libc.inotify_add_watch(fd, os.fsencode(path), WATCH_MASK)
+        if wd >= 0:
+            wd_to_path[wd] = path
+
+    def add_tree(root):
+        if skip_dir(root):
+            return
+        add_watch(root)
+        for dirpath, dirnames, _ in os.walk(root, followlinks=False):
+            dirnames[:] = [d for d in dirnames
+                           if not skip_dir(os.path.join(dirpath, d))
+                           and not os.path.islink(os.path.join(dirpath, d))]
+            for d in dirnames:
+                add_watch(os.path.join(dirpath, d))
+
+    add_tree(HOME)
+
+    lines = 0
+    if os.path.exists(LOG):
+        with open(LOG, "r", encoding="utf-8", errors="replace") as f:
+            lines = sum(1 for _ in f)
+
+    def log(path):
+        nonlocal lines
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M") + "\t" + path + "\n")
+        lines += 1
+        if lines > TRIM_AT:
+            with open(LOG, "r", encoding="utf-8", errors="replace") as f:
+                tail = f.readlines()[-KEEP:]
+            with open(LOG, "w", encoding="utf-8") as f:
+                f.writelines(tail)
+            lines = len(tail)
+
+    header = struct.Struct("iIII")
+    last = {}
+    while True:
+        try:
+            buf = os.read(fd, 65536)
+        except BlockingIOError:
+            # Inga händelser: vänta på fd via select-fritt sätt (sover i kärnan)
+            import select
+            select.select([fd], [], [])
+            continue
+        off = 0
+        while off < len(buf):
+            wd, mask, _cookie, length = header.unpack_from(buf, off)
+            name = buf[off + header.size: off + header.size + length].rstrip(b"\0").decode("utf-8", "replace")
+            off += header.size + length
+            if mask & IN_Q_OVERFLOW or wd not in wd_to_path:
+                continue
+            parent = wd_to_path[wd]
+            path = os.path.join(parent, name)
+            if mask & IN_ISDIR:
+                if mask & (IN_CREATE | IN_MOVED_TO):
+                    add_tree(path)
+                continue
+            if mask & (IN_CLOSE_WRITE | IN_MOVED_TO):
+                if name.endswith(IGNORE_SUFFIX) or name.startswith("."):
+                    continue
+                if path.startswith(STATE_DIR):
+                    continue
+                now = time.monotonic()
+                if now - last.get(path, 0) < 1.0:
+                    continue  # samma fil flera gånger på en sekund
+                last[path] = now
+                if len(last) > 1000:
+                    last.clear()
+                log(path)
+
+
+if __name__ == "__main__":
+    main()
