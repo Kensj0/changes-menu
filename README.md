@@ -4,7 +4,7 @@ En liten meny i GNOME:s panel som visar de senaste filerna du sparat eller ladda
 
 - Listan visar de **20 senaste** filerna, nyast först.
 - Under varje filnamn står datum och tid i liten text.
-- Klicka på en fil för att öppna mappen den ligger i.
+- Klicka på en fil för att öppna mappen den ligger i, med filen markerad (Nautilus). Om filhanteraren inte svarar öppnas bara mappen.
 - **Töm lista** rensar loggen.
 
 ## Så fungerar det
@@ -13,6 +13,13 @@ Två delar:
 
 1. **`changes-watch`** är en bakgrundstjänst (Python, inget extra paket). Den använder Linux inotify och sover tills något sparas, så den använder nästan ingen CPU. Den bevakar hemkatalogen men hoppar över dolda mappar (de som börjar med punkt), cache-mappar och ofullständiga nedladdningar (`.crdownload`, `.part`). Varje händelse läggs som en rad i `~/.local/state/changes/log.txt`, och loggen trimmas automatiskt.
 2. **GNOME-tillägget** läser loggen när menyn öppnas. Ingen bakgrundsläsning sker.
+
+## Licens
+
+Detta är **inte** en öppen källkodslicens enligt OSI-definitionen. Licensen är [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) (se `LICENSE`):
+
+- Alla får använda, kopiera, ändra och dela programmet **för icke-kommersiella syften** utan att fråga.
+- **Kommersiell användning kräver ett separat godkännande** från upphovspersonen.
 
 ## Krav
 

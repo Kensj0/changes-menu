@@ -52,6 +52,27 @@ class ChangesButton extends PanelMenu.Button {
         }
     }
 
+    // Öppnar mappen i filhanteraren med filen markerad (org.freedesktop.FileManager1).
+    // Om filhanteraren inte svarar öppnas bara mappen.
+    _revealFile(path) {
+        const openFolder = () => {
+            const folder = Gio.File.new_for_path(GLib.path_get_dirname(path));
+            Gio.AppInfo.launch_default_for_uri(folder.get_uri(), null);
+        };
+        Gio.DBus.session.call(
+            'org.freedesktop.FileManager1', '/org/freedesktop/FileManager1',
+            'org.freedesktop.FileManager1', 'ShowItems',
+            new GLib.Variant('(ass)', [[Gio.File.new_for_path(path).get_uri()], '']),
+            null, Gio.DBusCallFlags.NONE, -1, null,
+            (connection, res) => {
+                try {
+                    connection.call_finish(res);
+                } catch (e) {
+                    openFolder();
+                }
+            });
+    }
+
     _rebuild() {
         this.menu.removeAll();
         const entries = this._readEntries();
@@ -74,10 +95,7 @@ class ChangesButton extends PanelMenu.Button {
             item.add_child(box);
 
             // Klick öppnar mappen som filen ligger i
-            item.connect('activate', () => {
-                const folder = Gio.File.new_for_path(GLib.path_get_dirname(entry.path));
-                Gio.AppInfo.launch_default_for_uri(folder.get_uri(), null);
-            });
+            item.connect('activate', () => this._revealFile(entry.path));
             this.menu.addMenuItem(item);
         }
 
